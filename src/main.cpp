@@ -11,29 +11,45 @@
 
 #include <U8g2lib.h>
 
+#include <SPIFFS.h>
+
 #include "bitmaps.h"
 #include "defines.h"
 #include "menu.hpp"
 #include "pins.h"
 #include "rtcHelper.h"
+#include "spiffsHelper.hpp"
 
 using std::vector;
 
-struct Payload {
+struct Payload
+{
   tm time;
   int TankA;
   int TankB;
 };
 
-struct Levels {
+struct Levels
+{
   int A;
   int B;
+};
+
+struct Tank
+{
+  long Tare0;
+  long Tare100;
+
+  HX711 scale;
 };
 
 WiFiManager wm;
 U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0);
 ESP32Time rtc;
 HX711 loadCell;
+
+Tank A;
+Tank B;
 
 vector<Payload> PayloadStack = {};
 bool usingPortal = false;
@@ -43,11 +59,12 @@ TaskHandle_t DisplayManageHandle;
 TaskHandle_t UploadHandle;
 TaskHandle_t ReadDataHandle;
 
-Levels getLevels() { return {(int)random(0, 100), (int)random(0, 100)}; }
+Levels getLevels() { return {(int)A.scale.read(), (int)random(0, 100)}; }
 
 void fastPrint(int align, int y, String text, bool clear = true,
                bool sendBuffer = true,
-               const uint8_t *font = u8g2_font_6x12_tr) {
+               const uint8_t *font = u8g2_font_6x12_tr)
+{
   if (clear)
     u8g2.clearBuffer();
 
@@ -55,7 +72,8 @@ void fastPrint(int align, int y, String text, bool clear = true,
 
   u8g2.setFont(font);
 
-  switch (align) {
+  switch (align)
+  {
   case ALIGN_CENTER:
     u8g2.setCursor((width - u8g2.getUTF8Width(text.c_str())) / 2, y);
     break;
@@ -71,12 +89,14 @@ void fastPrint(int align, int y, String text, bool clear = true,
   }
   u8g2.print(text.c_str());
 
-  if (sendBuffer) {
+  if (sendBuffer)
+  {
     u8g2.sendBuffer();
   }
 }
 
-void log(String owner, const char *format, ...) {
+void log(String owner, const char *format, ...)
+{
   char loc_buf[64];
   char *temp = loc_buf;
   va_list arg;
@@ -86,14 +106,17 @@ void log(String owner, const char *format, ...) {
   int len = vsnprintf(temp, sizeof(loc_buf), format, copy);
   va_end(copy);
 
-  if (len < 0) {
+  if (len < 0)
+  {
     va_end(arg);
     return;
   }
 
-  if (len >= (int)sizeof(loc_buf)) {
+  if (len >= (int)sizeof(loc_buf))
+  {
     temp = (char *)malloc(len + 1);
-    if (temp == NULL) {
+    if (temp == NULL)
+    {
       va_end(arg);
       return;
     }
@@ -107,20 +130,24 @@ void log(String owner, const char *format, ...) {
   Serial.print("] ");
   Serial.println(temp);
 
-  if (temp != loc_buf) {
+  if (temp != loc_buf)
+  {
     free(temp);
   }
 }
 
-bool isPressed(short pin, bool useVdelay = true) {
-  auto dl = [useVdelay](int ms) {
+bool isPressed(short pin, bool useVdelay = true)
+{
+  auto dl = [useVdelay](int ms)
+  {
     if (useVdelay)
       vTaskDelay(ms);
     else
       delay(ms);
   };
 
-  if (digitalRead(pin) == HIGH) {
+  if (digitalRead(pin) == HIGH)
+  {
     dl(50);
     if (digitalRead(pin) == HIGH)
       return true;
@@ -131,9 +158,67 @@ bool isPressed(short pin, bool useVdelay = true) {
   return false;
 }
 
-void WiFiManageTask(void *parameters) {
-  for (;;) {
-    if (WiFi.status() == WL_CONNECTED) {
+void tareMode()
+{
+  fastPrint(0, 7, "Empty Tank A");
+
+  while (!isPressed(pins::select))
+  {
+    vTaskDelay(50 / portTICK_PERIOD_MS);
+  };
+  while (isPressed(pins::select))
+  {
+    vTaskDelay(50 / portTICK_PERIOD_MS);
+  };
+
+  SpiffsHelper::writeFile("/TankA0", String(A.scale.read_average(20)));
+
+  fastPrint(0, 7, "Empty Tank B");
+
+  while (!isPressed(pins::select))
+  {
+    vTaskDelay(50 / portTICK_PERIOD_MS);
+  };
+  while (isPressed(pins::select))
+  {
+    vTaskDelay(50 / portTICK_PERIOD_MS);
+  };
+
+  SpiffsHelper::writeFile("/TankB0", String(B.scale.read_average(20)));
+
+  fastPrint(0, 7, "Fill Tank A");
+
+  while (!isPressed(pins::select))
+  {
+    vTaskDelay(50 / portTICK_PERIOD_MS);
+  };
+  while (isPressed(pins::select))
+  {
+    vTaskDelay(50 / portTICK_PERIOD_MS);
+  };
+
+  SpiffsHelper::writeFile("/TankA100", String(A.scale.read_average(20)));
+
+  fastPrint(0, 7, "Fill Tank B");
+
+  while (!isPressed(pins::select))
+  {
+    vTaskDelay(50 / portTICK_PERIOD_MS);
+  };
+  while (isPressed(pins::select))
+  {
+    vTaskDelay(50 / portTICK_PERIOD_MS);
+  };
+
+  SpiffsHelper::writeFile("/TankB100", String(B.scale.read_average(20)));
+}
+
+void WiFiManageTask(void *parameters)
+{
+  for (;;)
+  {
+    if (WiFi.status() == WL_CONNECTED)
+    {
       // WiFi is still connected
       // log("WiFi", "OK");
       vTaskDelay(TIMEOUT_MS / portTICK_PERIOD_MS);
@@ -149,11 +234,13 @@ void WiFiManageTask(void *parameters) {
     WiFi.mode(WIFI_STA);
     WiFi.begin(wm.getWiFiSSID(true).c_str(), wm.getWiFiPass(true).c_str());
 
-    while (WiFi.status() != WL_CONNECTED && millis() - startTime < TIMEOUT_MS) {
+    while (WiFi.status() != WL_CONNECTED && millis() - startTime < TIMEOUT_MS)
+    {
       vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 
-    if (WiFi.status() != WL_CONNECTED) {
+    if (WiFi.status() != WL_CONNECTED)
+    {
       log("WiFi", "FAIL");
       vTaskDelay(20000 / portTICK_PERIOD_MS);
       continue;
@@ -163,9 +250,11 @@ void WiFiManageTask(void *parameters) {
   }
 }
 
-void DisplayManageTask(void *parameters) {
+void DisplayManageTask(void *parameters)
+{
 
-  auto renderBar = [](bool renderSettings = true, bool renderManager = false) {
+  auto renderBar = [](bool renderSettings = true, bool renderManager = false)
+  {
     u8g2.drawLine(0, 64 - 16 - 3, 128, 64 - 16 - 3);
     fastPrint(ALIGN_LEFT, 59, rtc.getTime("%H:%M"), false, false);
 
@@ -182,23 +271,29 @@ void DisplayManageTask(void *parameters) {
       u8g2.drawBitmap(128 - 33, 64 - 16, 16 / 8, 16, bmpSettings);
   };
 
-  auto renderMenu = [renderBar](String items[], int numMenuItems) {
+  auto renderMenu = [renderBar](String items[], int numMenuItems)
+  {
     bool exit = false;
     // int numMenuItems = sizeof(items) / sizeof(items[0]); // Change this to
     // the actual number of menu items
     int selectedIndex = 0;
 
-    while (!exit) {
+    while (!exit)
+    {
       u8g2.clear();
 
       int startIdx = max(0, selectedIndex - 1);
       int endIdx = min(numMenuItems - 1, startIdx + 2);
 
-      for (int i = startIdx; i <= endIdx; i++) {
-        if (i == selectedIndex) {
+      for (int i = startIdx; i <= endIdx; i++)
+      {
+        if (i == selectedIndex)
+        {
           u8g2.drawButtonUTF8(3, 13 * (i - startIdx + 1), U8G2_BTN_INV, 0, 2, 2,
                               (String(i + 1) + ". " + items[i]).c_str());
-        } else {
+        }
+        else
+        {
           u8g2.drawButtonUTF8(3, 13 * (i - startIdx + 1), U8G2_BTN_BW0, 0, 2, 2,
                               (String(i + 1) + ". " + items[i]).c_str());
         }
@@ -207,22 +302,26 @@ void DisplayManageTask(void *parameters) {
       renderBar();
       u8g2.sendBuffer();
 
-      while (true) {
-        if (isPressed(pins::up)) {
+      while (true)
+      {
+        if (isPressed(pins::up))
+        {
           selectedIndex = (selectedIndex - 1 + numMenuItems) % numMenuItems;
           while (digitalRead(pins::up) == HIGH)
             ;
           break;
         }
 
-        if (isPressed(pins::down)) {
+        if (isPressed(pins::down))
+        {
           selectedIndex = (selectedIndex + 1) % numMenuItems;
           while (digitalRead(pins::down) == HIGH)
             ;
           break;
         }
 
-        if (isPressed(pins::select)) {
+        if (isPressed(pins::select))
+        {
           while (digitalRead(pins::select) == HIGH)
             ;
           return items[selectedIndex];
@@ -234,11 +333,13 @@ void DisplayManageTask(void *parameters) {
   };
 
   auto renderMenuTitle = [renderBar](String title, String items[],
-                                     int numMenuItems) {
+                                     int numMenuItems)
+  {
     bool exit = false;
     int selectedIndex = 0;
 
-    while (!exit) {
+    while (!exit)
+    {
       u8g2.clear();
 
       u8g2.setFont(u8g2_font_6x13_tr);
@@ -249,11 +350,15 @@ void DisplayManageTask(void *parameters) {
       int startIdx = max(0, selectedIndex - 1);
       int endIdx = min(numMenuItems - 1, startIdx + 2);
 
-      for (int i = startIdx; i <= endIdx; i++) {
-        if (i == selectedIndex) {
+      for (int i = startIdx; i <= endIdx; i++)
+      {
+        if (i == selectedIndex)
+        {
           u8g2.drawButtonUTF8(3, 13 * (i - startIdx + 1) + 15, U8G2_BTN_INV, 0,
                               2, 2, (String(i + 1) + ". " + items[i]).c_str());
-        } else {
+        }
+        else
+        {
           u8g2.drawButtonUTF8(3, 13 * (i - startIdx + 1) + 15, U8G2_BTN_BW0, 0,
                               2, 2, (String(i + 1) + ". " + items[i]).c_str());
         }
@@ -262,22 +367,26 @@ void DisplayManageTask(void *parameters) {
       renderBar();
       u8g2.sendBuffer();
 
-      while (true) {
-        if (isPressed(pins::up)) {
+      while (true)
+      {
+        if (isPressed(pins::up))
+        {
           selectedIndex = (selectedIndex - 1 + numMenuItems) % numMenuItems;
           while (digitalRead(pins::up) == HIGH)
             ;
           break;
         }
 
-        if (isPressed(pins::down)) {
+        if (isPressed(pins::down))
+        {
           selectedIndex = (selectedIndex + 1) % numMenuItems;
           while (digitalRead(pins::down) == HIGH)
             ;
           break;
         }
 
-        if (isPressed(pins::select)) {
+        if (isPressed(pins::select))
+        {
           while (digitalRead(pins::select) == HIGH)
             ;
           return items[selectedIndex];
@@ -288,13 +397,15 @@ void DisplayManageTask(void *parameters) {
     }
   };
 
-  for (;;) {
+  for (;;)
+  {
     bool dontUseDelay = false;
     u8g2.clearBuffer();
 
     renderBar(false);
 
-    if (digitalRead(pins::menu) == HIGH) {
+    if (digitalRead(pins::menu) == HIGH)
+    {
       renderBar(true);
 
       fastPrint(ALIGN_LEFT, 7, "Release the button", false);
@@ -308,12 +419,16 @@ void DisplayManageTask(void *parameters) {
       String result =
           renderMenu(menuItems, sizeof(menuItems) / sizeof(menuItems[0]));
 
-      if (result == "Exit") {
+      if (result == "Exit")
+      {
         while (isPressed(pins::select))
           ;
-      } else if (result == "WiFi Config") {
+      }
+      else if (result == "WiFi Config")
+      {
         if (renderMenuTitle("Start Manager?", wifiMenu,
-                            sizeof(wifiMenu) / sizeof(wifiMenu[0])) == "Yes") {
+                            sizeof(wifiMenu) / sizeof(wifiMenu[0])) == "Yes")
+        {
 
           fastPrint(ALIGN_LEFT, 7, "Running Portal", true, false);
           fastPrint(ALIGN_LEFT, 15, "Press <reset> to stop", false, true);
@@ -330,9 +445,13 @@ void DisplayManageTask(void *parameters) {
             ;
         }
         goto mainMenu;
-      } else if (result == "Settings") {
+      }
+      else if (result == "Settings")
+      {
         goto mainMenu;
-      } else if (result == "Status") {
+      }
+      else if (result == "Status")
+      {
         /**********************************
          * THE DATA :
          *  1. Temprature
@@ -342,7 +461,8 @@ void DisplayManageTask(void *parameters) {
          *  5. ...
          **********************************/
 
-        while (!isPressed(pins::menu)) {
+        while (!isPressed(pins::menu))
+        {
           int hours = esp_timer_get_time() / 3600000000 % 24;
           int mins = esp_timer_get_time() / 60000000 % 60;
           int secs = esp_timer_get_time() / 1000000 % 60;
@@ -355,7 +475,8 @@ void DisplayManageTask(void *parameters) {
           vTaskDelay(50 / portTICK_PERIOD_MS);
         }
 
-        while (isPressed(pins::menu)) {
+        while (isPressed(pins::menu))
+        {
           vTaskDelay(50 / portTICK_PERIOD_MS);
         }
 
@@ -363,7 +484,9 @@ void DisplayManageTask(void *parameters) {
       }
 
       dontUseDelay = true;
-    } else {
+    }
+    else
+    {
 
       if (PayloadStack.size() > 1)
         fastPrint(ALIGN_RIGHT, 30, String(PayloadStack.size()), false, false);
@@ -382,8 +505,10 @@ void DisplayManageTask(void *parameters) {
   }
 }
 
-void UploadTask(void *parameters) {
-  auto upload = [](String Data) {
+void UploadTask(void *parameters)
+{
+  auto upload = [](String Data)
+  {
     HTTPClient http;
     http.setTimeout(10000);
     http.begin(SERVER_URL);
@@ -393,13 +518,16 @@ void UploadTask(void *parameters) {
     return responseCode;
   };
 
-  for (;;) {
-    if (WiFi.status() != WL_CONNECTED) {
+  for (;;)
+  {
+    if (WiFi.status() != WL_CONNECTED)
+    {
       vTaskDelay(TIMEOUT_MS);
       continue;
     }
 
-    for (int i = 0; i < PayloadStack.size();) {
+    for (int i = 0; i < PayloadStack.size();)
+    {
       String data =
           "{\"auth\": \"rjh1i2h\", \"TankA\": " +
           String(PayloadStack[i].TankA) +
@@ -410,10 +538,13 @@ void UploadTask(void *parameters) {
 
       auto x = upload(data);
 
-      if (x > 0) {
+      if (x > 0)
+      {
         log("PUSH", "OK");
         PayloadStack.erase(PayloadStack.begin() + i);
-      } else {
+      }
+      else
+      {
         log("PUSH", "FAIL ==> %d", x);
         vTaskDelay(TIMEOUT_MS / portTICK_PERIOD_MS);
       }
@@ -422,8 +553,10 @@ void UploadTask(void *parameters) {
   }
 }
 
-void ReadDataTask(void *parameters) {
-  for (;;) {
+void ReadDataTask(void *parameters)
+{
+  for (;;)
+  {
     Levels l = getLevels();
 
     log("READ", "%d %d", l.A, l.B);
@@ -438,15 +571,38 @@ void ReadDataTask(void *parameters) {
   }
 }
 
-void setup() {
+void setup()
+{
   Serial.begin(115200);
   u8g2.begin();
-  loadCell.begin(pins::loadCellDT, pins::loadCellSCK);
+
+  A.scale.begin(pins::loadCellDT, pins::loadCellSCK);
+  B.scale.begin(pins::loadCellDT, pins::loadCellSCK);
 
   pinMode(pins::menu, INPUT);
   pinMode(pins::select, INPUT);
   pinMode(pins::down, INPUT);
   pinMode(pins::up, INPUT);
+
+  if (!SPIFFS.begin())
+  {
+
+    // ToDo: some form of error tracking
+    tareMode();
+  }
+
+  if (!SPIFFS.exists("/TankA0") || !SPIFFS.exists("/TankA100") || !SPIFFS.exists("/TankB0") || !SPIFFS.exists("/TankB100"))
+  {
+    tareMode();
+  }
+  else
+  {
+    A.Tare0 = SpiffsHelper::readFile("/TankA0").toInt();
+    A.Tare100 = SpiffsHelper::readFile("/TankA100").toInt();
+
+    B.Tare0 = SpiffsHelper::readFile("/TankB0").toInt();
+    B.Tare100 = SpiffsHelper::readFile("/TankB100").toInt();
+  }
 
   bool useNTP = false;
 
@@ -465,10 +621,14 @@ void setup() {
 
   wm.autoConnect(WM_AP_NAME);
 
-  if (useNTP) {
-    if (WiFi.status() == WL_CONNECTED) {
+  if (useNTP)
+  {
+    if (WiFi.status() == WL_CONNECTED)
+    {
       setSystemTimeFromNTP(rtc);
-    } else {
+    }
+    else
+    {
       // TODO: Add some logging / display thing on the OLED
       ESP.restart();
     }
