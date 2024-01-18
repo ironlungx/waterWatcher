@@ -9,7 +9,9 @@ namespace pins
     short down = 34;
     
     // Load Cell 
-    short loadCellDT = 27;
-    short loadCellSCK = 26;
+    short loadCellDT = 26;
+    short loadCellSCK = 27;
+
+    short waterPump = 2;
 } // namespace pins
 

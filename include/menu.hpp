@@ -5,6 +5,7 @@
 String menuItems[] = {
     "Exit",
     "WiFi Config",
+    "Tare Mode",
     "Settings",
     "Status"
 };

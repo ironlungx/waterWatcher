@@ -9,5 +9,5 @@
 #define ALIGN_RIGHT -2
 #define ALIGN_LEFT -3
 
-#define INTERVAL_MS 15000
+#define INTERVAL_MS 1000
 #define TIMEOUT_MS 10000

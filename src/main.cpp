@@ -25,14 +25,14 @@ using std::vector;
 struct Payload
 {
   tm time;
-  int TankA;
-  int TankB;
+  int OverGroundTank;
+  int UnderGroundTank;
 };
 
 struct Levels
 {
-  int A;
-  int B;
+  long OverGroundTank;
+  long UnderGroundTank;
 };
 
 struct Tank
@@ -48,18 +48,28 @@ U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0);
 ESP32Time rtc;
 HX711 loadCell;
 
-Tank A;
-Tank B;
+Tank OverGroundTank;
+Tank UnderGroundTank;
 
 vector<Payload> PayloadStack = {};
 bool usingPortal = false;
 
-TaskHandle_t WiFiManageHandle;
-TaskHandle_t DisplayManageHandle;
-TaskHandle_t UploadHandle;
-TaskHandle_t ReadDataHandle;
+TaskHandle_t WiFiManageHandle = NULL;
+TaskHandle_t DisplayManageHandle = NULL;
+TaskHandle_t UploadHandle = NULL;
+TaskHandle_t ReadDataHandle = NULL;
 
-Levels getLevels() { return {(int)A.scale.read(), (int)random(0, 100)}; }
+Levels getLevels()
+{
+  Levels levels;
+
+  int changeT = OverGroundTank.Tare100 - OverGroundTank.Tare0;
+
+  return {
+      // ((A.scale.read_average(5) - (double)A.Tare0) / changeT ) * 100,
+      ((OverGroundTank.scale.read_average(7) - (double)OverGroundTank.Tare0) / changeT) * 100,
+      0};
+}
 
 void fastPrint(int align, int y, String text, bool clear = true,
                bool sendBuffer = true,
@@ -160,57 +170,71 @@ bool isPressed(short pin, bool useVdelay = true)
 
 void tareMode()
 {
+  if (ReadDataHandle != NULL)  
+    vTaskSuspend(ReadDataHandle);
+  
+  digitalWrite(pins::waterPump, HIGH);
+
+  log("TARE", "hmm");
+
+  auto releaseBtn = []()
+  {
+    u8g2.clearBuffer();
+    fastPrint(ALIGN_LEFT, 7, "Release the button", false);
+    while (digitalRead(pins::select) == HIGH)
+      ;
+
+    u8g2.clearBuffer();
+  };
+
   fastPrint(0, 7, "Empty Tank A");
 
   while (!isPressed(pins::select))
   {
-    vTaskDelay(50 / portTICK_PERIOD_MS);
-  };
-  while (isPressed(pins::select))
-  {
-    vTaskDelay(50 / portTICK_PERIOD_MS);
+    vTaskDelay(5 / portTICK_PERIOD_MS);
   };
 
-  SpiffsHelper::writeFile("/TankA0", String(A.scale.read_average(20)));
+  releaseBtn();
 
-  fastPrint(0, 7, "Empty Tank B");
+  SpiffsHelper::writeFile("/TankA0", String(OverGroundTank.scale.read_average(20)));
 
-  while (!isPressed(pins::select))
-  {
-    vTaskDelay(50 / portTICK_PERIOD_MS);
-  };
-  while (isPressed(pins::select))
-  {
-    vTaskDelay(50 / portTICK_PERIOD_MS);
-  };
+  // fastPrint(0, 7, "Empty Tank B");
 
-  SpiffsHelper::writeFile("/TankB0", String(B.scale.read_average(20)));
+  // while (!isPressed(pins::select))
+  // {
+  //   vTaskDelay(50 / portTICK_PERIOD_MS);
+  // };
+  // while (isPressed(pins::select))
+  // {
+  //   vTaskDelay(50 / portTICK_PERIOD_MS);
+  // };
+
+  // SpiffsHelper::writeFile("/TankB0", String(B.scale.read_average(20)));
 
   fastPrint(0, 7, "Fill Tank A");
 
   while (!isPressed(pins::select))
   {
-    vTaskDelay(50 / portTICK_PERIOD_MS);
+    vTaskDelay(5 / portTICK_PERIOD_MS);
   };
-  while (isPressed(pins::select))
-  {
-    vTaskDelay(50 / portTICK_PERIOD_MS);
-  };
+  releaseBtn();
 
-  SpiffsHelper::writeFile("/TankA100", String(A.scale.read_average(20)));
+  SpiffsHelper::writeFile("/TankA100", String(OverGroundTank.scale.read_average(20)));
 
-  fastPrint(0, 7, "Fill Tank B");
+  // fastPrint(0, 7, "Fill Tank B");
 
-  while (!isPressed(pins::select))
-  {
-    vTaskDelay(50 / portTICK_PERIOD_MS);
-  };
-  while (isPressed(pins::select))
-  {
-    vTaskDelay(50 / portTICK_PERIOD_MS);
-  };
+  // while (!isPressed(pins::select))
+  // {
+  //   vTaskDelay(50 / portTICK_PERIOD_MS);
+  // };
+  // while (isPressed(pins::select))
+  // {
+  //   vTaskDelay(50 / portTICK_PERIOD_MS);
+  // };
 
-  SpiffsHelper::writeFile("/TankB100", String(B.scale.read_average(20)));
+  // SpiffsHelper::writeFile("/TankB100", String(B.scale.read_average(20)));
+
+  ESP.restart();
 }
 
 void WiFiManageTask(void *parameters)
@@ -446,6 +470,10 @@ void DisplayManageTask(void *parameters)
         }
         goto mainMenu;
       }
+      else if (result == "Tare Mode")
+      {
+        tareMode();
+      }
       else if (result == "Settings")
       {
         goto mainMenu;
@@ -488,20 +516,23 @@ void DisplayManageTask(void *parameters)
     else
     {
 
-      if (PayloadStack.size() > 1)
-        fastPrint(ALIGN_RIGHT, 30, String(PayloadStack.size()), false, false);
+      // if (PayloadStack.size() > 1)
+      //   fastPrint(ALIGN_RIGHT, 30, String(PayloadStack.size()), false, false);
 
       fastPrint(ALIGN_CENTER, 43,
-                String("A: ") + String(getLevels().A) + String(" B: ") +
-                    String(getLevels().B),
+                String("A: ") + String(getLevels().OverGroundTank) + String(" B: ") +
+                    String(getLevels().UnderGroundTank),
                 false, false);
+      // fastPrint(ALIGN_CENTER, 43,
+      //           String("A: ") + String(getLevels().A),
+      //           false, false);
 
       u8g2.sendBuffer();
     }
 
-    // Run the task every 1 second
+    // Run the task every 200 ms
     if (!dontUseDelay)
-      vTaskDelay(1000 / portTICK_PERIOD_MS);
+      vTaskDelay(50 / portTICK_PERIOD_MS);
   }
 }
 
@@ -530,8 +561,8 @@ void UploadTask(void *parameters)
     {
       String data =
           "{\"auth\": \"rjh1i2h\", \"TankA\": " +
-          String(PayloadStack[i].TankA) +
-          ", \"TankB\": " + String(PayloadStack[i].TankB) +
+          String(PayloadStack[i].OverGroundTank) +
+          ", \"UnderGroundTank\": " + String(PayloadStack[i].UnderGroundTank) +
           ", \"time\": {\"Hours\": " + String(PayloadStack[i].time.tm_hour) +
           ", \"Mins\": " + String(PayloadStack[i].time.tm_min) +
           ", \"Secs\": " + String(PayloadStack[i].time.tm_sec) + "}}";
@@ -559,13 +590,39 @@ void ReadDataTask(void *parameters)
   {
     Levels l = getLevels();
 
-    log("READ", "%d %d", l.A, l.B);
+    log("READ", "%d %d", l.OverGroundTank, l.UnderGroundTank);
 
     tm now;
     getLocalTime(&now);
 
-    Payload data = {now, l.A, l.B};
+    Payload data = {now, l.OverGroundTank, l.UnderGroundTank};
     PayloadStack.push_back(data);
+
+/*     if (getLevels().UnderGroundTank > 50)
+    {
+      digitalWrite(pins::waterPump, LOW);
+
+      while (getLevels().OverGroundTank < 70)
+      {
+        vTaskDelay(20 / portTICK_PERIOD_MS);
+      };
+      digitalWrite(pins::waterPump, HIGH);
+    } */
+
+    if (getLevels().OverGroundTank < 80)
+    {
+      digitalWrite(pins::waterPump, LOW);
+
+      // while (getLevels().UnderGroundTank != 10)
+      // ;
+
+      while (getLevels().OverGroundTank <= 90)
+      {
+        vTaskDelay(500 / portTICK_PERIOD_MS);
+      }
+
+      digitalWrite(pins::waterPump, HIGH);
+    }
 
     vTaskDelay(INTERVAL_MS / portTICK_PERIOD_MS);
   }
@@ -576,50 +633,55 @@ void setup()
   Serial.begin(115200);
   u8g2.begin();
 
-  A.scale.begin(pins::loadCellDT, pins::loadCellSCK);
-  B.scale.begin(pins::loadCellDT, pins::loadCellSCK);
+  OverGroundTank.scale.begin(pins::loadCellDT, pins::loadCellSCK);
+  OverGroundTank.scale.wait_ready();
+  OverGroundTank.scale.power_up();
+  // B.scale.begin(pins::loadCellDT, pins::loadCellSCK);
 
   pinMode(pins::menu, INPUT);
   pinMode(pins::select, INPUT);
   pinMode(pins::down, INPUT);
   pinMode(pins::up, INPUT);
 
+  pinMode(pins::waterPump, OUTPUT);
+  digitalWrite(pins::waterPump, HIGH);
+
   if (!SPIFFS.begin())
   {
-
     // ToDo: some form of error tracking
     tareMode();
   }
 
-  if (!SPIFFS.exists("/TankA0") || !SPIFFS.exists("/TankA100") || !SPIFFS.exists("/TankB0") || !SPIFFS.exists("/TankB100"))
+  if (!SPIFFS.exists("/TankA0") || !SPIFFS.exists("/TankA100") /* || !SPIFFS.exists("/TankB0") || !SPIFFS.exists("/TankB100") */)
   {
+
     tareMode();
   }
   else
   {
-    A.Tare0 = SpiffsHelper::readFile("/TankA0").toInt();
-    A.Tare100 = SpiffsHelper::readFile("/TankA100").toInt();
 
-    B.Tare0 = SpiffsHelper::readFile("/TankB0").toInt();
-    B.Tare100 = SpiffsHelper::readFile("/TankB100").toInt();
+    OverGroundTank.Tare0 = SpiffsHelper::readFile("/TankA0").toInt();
+    OverGroundTank.Tare100 = SpiffsHelper::readFile("/TankA100").toInt();
+    // OverGroundTank.Tare0 = 473182;
+    // OverGroundTank.Tare100 = 396376;
+
+    // B.Tare0 = SpiffsHelper::readFile("/TankB0").toInt();
+    // B.Tare100 = SpiffsHelper::readFile("/TankB100").toInt();
   }
 
   bool useNTP = false;
 
   useNTP = !setSystemTimeFromRTC();
 
-  xTaskCreate(DisplayManageTask, "Display Managing task", 1024 * 6, NULL, 1,
+  xTaskCreate(DisplayManageTask, "Display Managing task", 1024 * 6, NULL, tskIDLE_PRIORITY,
               &DisplayManageHandle);
 
   // wm.resetSettings();
   // wm.setDebugOutput(false);
 
   // wm.setConfigPortalTimeout(180);
-
-  log("DEBG", "%s, %s", wm.getWiFiSSID(true).c_str(),
-      wm.getWiFiPass(true).c_str());
-
-  wm.autoConnect(WM_AP_NAME);
+  // wm.autoConnect(WM_AP_NAME);
+  WiFi.begin("Hobbiton", "taxicab1729");
 
   if (useNTP)
   {
@@ -634,14 +696,24 @@ void setup()
     }
   }
 
-  xTaskCreatePinnedToCore(WiFiManageTask, "WiFi Managing Task", 4096, NULL, 2,
-                          &WiFiManageHandle, CONFIG_ARDUINO_RUNNING_CORE);
-
-  xTaskCreatePinnedToCore(ReadDataTask, "Read Data task", 4096, NULL, 3,
+  xTaskCreatePinnedToCore(ReadDataTask, "Read Data task", 4096, NULL, tskIDLE_PRIORITY,
                           &ReadDataHandle, 0);
 
-  xTaskCreatePinnedToCore(UploadTask, "Upload Data task", 4096, NULL, 2,
-                          &UploadHandle, CONFIG_ARDUINO_RUNNING_CORE);
+  // ArduinoOTA.begin();
+  // ArduinoOTA.setPassword("admin");
+  // ArduinoOTA.setPort(3232);
+
+  /* DISABLE WIFI */
+
+  // xTaskCreatePinnedToCore(WiFiManageTask, "WiFi Managing Task", 4096, NULL, 2,
+  //                         &WiFiManageHandle, CONFIG_ARDUINO_RUNNING_CORE);
+
+  // xTaskCreatePinnedToCore(UploadTask, "Upload Data task", 4096, NULL, 2,
+  //                         &UploadHandle, CONFIG_ARDUINO_RUNNING_CORE);
+  Serial.println("SEND HELP");
+
 }
 
-void loop() {}
+void loop() {
+  // ArduinoOTA.handle();
+}
